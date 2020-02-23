@@ -76,41 +76,21 @@ let execute = async () => {
 
 // execute();
 
-let getTestimony = async () => {
-  const db = await connect();
-  const browser = await puppeteer.launch({headless: true});
-  const page = await browser.newPage();
 
-  const data = await getAll(SASCSchema);
-  logger.info('Fetched SASC Links...');
 
-  const ee = new events.EventEmitter();
-  ee.on('getDownloadLink', async data => {
-    let {links, type, homeLink, id} = data;
-    let page = await browser.newPage();
+const ee = new events.EventEmitter();
+ee.on('getPDFs', async ({ data, type, id }) => {
+  
+  if (!fs.existsSync(path.resolve(__dirname, 'pdfs', id))) {
+    fs.mkdirSync(path.resolve(__dirname, 'pdfs', id));
+  }
 
-    page.waitForSelector('div.row a').then(async _ => {
-      let downloadLink = await page.$$eval('div.row a', x =>
-        x.map(a => a.href),
-      );
+  if (!fs.existsSync(path.resolve(__dirname, 'pdfs', id, type))) {
+    fs.mkdirSync(path.resolve(__dirname, 'pdfs', id, type));
+  }
 
-      if (!fs.existsSync(path.resolve(__dirname, 'pdfs', id))) {
-        fs.mkdirSync(path.resolve(__dirname, 'pdfs', id));
-      }
-      ee.emit('getPDF', {link: downloadLink[0], type, id});
-    });
+  let promises = data.map(({ fileName, link }) => new Promise(async(resolve, reject) => {
 
-    for (let [i, link] of links.entries()) {
-      logger.info(
-        `Getting ${type} #${i + 1} of ${links.length} for ${homeLink}`,
-      );
-      await page.goto(link);
-    }
-
-    await page.close();
-  });
-
-  ee.on('getPDF', async ({link, type, id}) => {
     const options = {
       uri: link,
       method: 'GET',
@@ -119,22 +99,37 @@ let getTestimony = async () => {
         'Content-type': 'applcation/pdf',
       },
     };
-    let res = await rp(options);
-    let linkObject = new URL(link);
-    let fileName = linkObject.toString().split("id=")[1].split("&download")[0]; 
-    let writeStream = fs.createWriteStream(
-      path.resolve(__dirname, 'pdfs', id, fileName, ".pdf"),
-    );
-    writeStream.write(res, 'binary');
-    writeStream.on('finish', () => {
-      logger.info(`Downloaded ${type}.`);
-    });
-    writeStream.end();
-  });
 
+    let res = await rp(options);
+    let writeStream = fs.createWriteStream(path.resolve(__dirname, 'pdfs', id, type, fileName));
+    writeStream.write(res, 'binary');
+    writeStream.on('error', () => {
+      logger.error(`Could not write PDF for ${id}`, err);
+      reject();
+    });
+    writeStream.on('finish', () => {
+      logger.info(`Finished writing for ${fileName}`);
+      resolve();
+    });
+  }));
+
+  await Promise.all(promises);
+  logger.info(`Finished writing all PDFs for ${id}`);
+
+});
+
+let getTestimony = async () => {
+  const db = await connect();
+  const browser = await puppeteer.launch({headless: true});
+  const page = await browser.newPage();
+
+  let data = await getAll(SASCSchema);
+  logger.info('Fetched SASC Links...');
+
+  // For every page....
   await asyncForEach(data, async datum => {
-    const {link, _id} = datum;
-    await page.goto(link, {waitUntil: 'networkidle2'}); // Ensure no network requests are happening (in last 500ms).
+    const {link, _id, date } = datum;
+    await page.goto(link, {waitUntil: 'networkidle2'});
     let html = await page.content();
     let cleaned = html.replace(/[\t\n]+/g, ' ');
     let $ = cheerio.load(cleaned);
@@ -144,21 +139,41 @@ let getTestimony = async () => {
     let hearingTranscript = $("a[style='text-transform: capitalize;']")
       .toArray()
       .map(v => $(v).attr('href'));
-    if (hearingTestimony.length) {
-      ee.emit('getDownloadLink', {
-        links: hearingTestimony,
-        type: 'testimony',
-        homeLink: link,
-        id: _id.toString(),
+
+      if (hearingTestimony.length) {
+      let promises = hearingTestimony.map(_ => browser.newPage());
+      let pages = await Promise.all(promises);
+      let promisesTwo = pages.map(async(v,i) => {
+        logger.info(`[${date}] > #${i + 1} of ${hearingTestimony.length} for ${link}`);
+        await v.goto(hearingTestimony[i], {waitUntil: 'networkidle2'});
+        await v.waitFor(5000);
+        let l = v.url();
+        let linkObject = new URL(l);
+        let fileName = linkObject.pathname.split("/")[linkObject.pathname.split("/").length - 1].replace(/%20/g, "_");
+        return { fileName, link: linkObject.href, page: v }
       });
+      
+      let data = await Promise.all(promisesTwo);
+      await Promise.all(data.map(({ page }) => page.close()));
+      ee.emit('getPDFs', { data, id: _id.toString(), type: 'testimony' });
     }
+
     if (hearingTranscript.length) {
-      ee.emit('getDownloadLink', {
-        links: hearingTranscript,
-        type: 'transcript',
-        homeLink: link,
-        id: _id.toString(),
+      let promises = hearingTranscript.map(_ => browser.newPage());
+      let pages = await Promise.all(promises);
+      let promisesTwo = pages.map(async(v,i) => {
+        logger.info(`#${i + 1} of ${hearingTranscript.length} for ${link}`);
+        await v.goto(hearingTranscript[i], {waitUntil: 'networkidle2'});
+        await v.waitFor(5000);
+        let l = v.url();
+        let linkObject = new URL(l);
+        let fileName = linkObject.pathname.split("/")[linkObject.pathname.split("/").length - 1].replace(/%20/g, "_");
+        return { fileName, link: linkObject.href, page: v }
       });
+      
+      let data = await Promise.all(promisesTwo);
+      await Promise.all(data.map(({ page }) => page.close()));
+      ee.emit('getPDFs', { data, id: _id.toString(), type: 'transcript' });
     }
   });
 
