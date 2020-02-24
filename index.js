@@ -58,7 +58,7 @@ const getHearings = async (url, page) => {
 let execute = async () => {
   connect();
 
-  const browser = await puppeteer.launch({headless: true});
+  const browser = await puppeteer.launch({headless: false});
   const page = await browser.newPage();
 
   await asyncForEach(range, async pageNum => {
@@ -101,33 +101,35 @@ ee.on('getPDFs', async ({ data, type, id }) => {
     };
 
     let res = await rp(options);
+    fileName = fileName.endsWith('.pdf') ? fileName : fileName.concat(".pdf");
     let writeStream = fs.createWriteStream(path.resolve(__dirname, 'pdfs', id, type, fileName));
     writeStream.write(res, 'binary');
-    writeStream.on('error', () => {
-      logger.error(`Could not write PDF for ${id}`, err);
+    writeStream.end();
+    writeStream.on('error', (err) => {
+      logger.error(`Could not write ${type} for ${id}`, err);
       reject();
     });
-    writeStream.on('finish', () => {
-      logger.info(`Finished writing for ${fileName}`);
+    writeStream.on('close', () => {
+      logger.info(`Finished writing ${type}: ${fileName}`);
       resolve();
     });
   }));
 
   await Promise.all(promises);
-  logger.info(`Finished writing all PDFs for ${id}`);
+  logger.info(`Finished writing all ${type}(s) for ${id}`);
 
 });
 
 let getTestimony = async () => {
   const db = await connect();
-  const browser = await puppeteer.launch({headless: true});
+  const browser = await puppeteer.launch({headless: false});
   const page = await browser.newPage();
 
   let data = await getAll(SASCSchema);
   logger.info('Fetched SASC Links...');
 
   // For every page....
-  await asyncForEach(data, async datum => {
+  await asyncForEach([data[151], data[149], data[130]], async datum => {
     const {link, _id, date } = datum;
     await page.goto(link, {waitUntil: 'networkidle2'});
     let html = await page.content();
@@ -144,7 +146,7 @@ let getTestimony = async () => {
       let promises = hearingTestimony.map(_ => browser.newPage());
       let pages = await Promise.all(promises);
       let promisesTwo = pages.map(async(v,i) => {
-        logger.info(`[${date}] > #${i + 1} of ${hearingTestimony.length} for ${link}`);
+        logger.info(`[${date}] > testimony #${i + 1} of ${hearingTestimony.length} for ${link}`);
         await v.goto(hearingTestimony[i], {waitUntil: 'networkidle2'});
         await v.waitFor(5000);
         let l = v.url();
@@ -162,7 +164,7 @@ let getTestimony = async () => {
       let promises = hearingTranscript.map(_ => browser.newPage());
       let pages = await Promise.all(promises);
       let promisesTwo = pages.map(async(v,i) => {
-        logger.info(`#${i + 1} of ${hearingTranscript.length} for ${link}`);
+        logger.info(`[${date}] > transcript #${i + 1} of ${hearingTranscript.length} for ${link}`);
         await v.goto(hearingTranscript[i], {waitUntil: 'networkidle2'});
         await v.waitFor(5000);
         let l = v.url();
