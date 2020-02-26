@@ -24,7 +24,7 @@ let downloader = async (url, id, type) => new Promise((resolve,reject) => {
   let writeStream = fs.createWriteStream(filePath);
 
   writeStream.on('finish', () => {
-    console.log(`Finished writing: ${fileName}`);
+    console.log(`Finished writing: ${filePath}`);
     resolve();
   });
 

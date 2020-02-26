@@ -20,7 +20,7 @@ ee.on('getPDFs', async ({ downloadItems, id }) => {
 
 let getTestimony = async () => {
   const db = await connect();
-  const browser = await puppeteer.launch({headless: false});
+  const browser = await puppeteer.launch({headless: true});
   const page = await browser.newPage();
 
   let data = await getAll(SASCSchema);
